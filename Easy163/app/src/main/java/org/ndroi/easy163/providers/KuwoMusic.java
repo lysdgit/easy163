@@ -1,116 +1,89 @@
-package org.ndroi.easy163.providers;
+const insure = require('./insure');
+const select = require('./select');
+const crypto = require('../crypto');
+const request = require('../request');
+const { getManagedCacheStorage } = require('../cache');
 
-import android.util.Log;
+const format = (song) => ({
+	id: song.MUSICRID.split('_').pop(),
+	name: song.SONGNAME,
+	// duration: song.songTimeMinutes.split(':').reduce((minute, second) => minute * 60 + parseFloat(second), 0) * 1000,
+	duration: song.DURATION * 1000,
+	album: { id: song.ALBUMID, name: song.ALBUM },
+	artists: song.ARTIST.split('&').map((name, index) => ({
+		id: index ? null : song.ARTISTID,
+		name,
+	})),
+});
 
-import com.alibaba.fastjson.JSONArray;
-import com.alibaba.fastjson.JSONObject;
+const search = (info) => {
+	// const keyword = encodeURIComponent(info.keyword.replace(' - ', ' '));
+	// const url = `http://www.kuwo.cn/api/www/search/searchMusicBykeyWord?key=${keyword}&pn=1&rn=30`;
+	// const cookie = process.env.KUWO_COOKIE || null;
 
-import org.ndroi.easy163.core.Local;
-import org.ndroi.easy163.utils.ReadStream;
-import org.ndroi.easy163.utils.Keyword;
-import org.ndroi.easy163.utils.Song;
-import java.io.IOException;
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.util.Arrays;
+	// return request('GET', url, {
+	// 	referer: `http://www.kuwo.cn/search/list?key=${keyword}`,
+	// 	secret: cookie
+	// 		? (cookie.match(/Secret=([0-9a-f]{72})/) || [])[1]
+	// 		: null,
+	// 	cookie,
+	// })
+	// 	.then((response) => response.json())
+	// 	.then((jsonBody) => {
+	// 		if (!jsonBody || jsonBody.code !== 200 || jsonBody.data.total < 1)
+	// 			return Promise.reject();
+	// 		const list = jsonBody.data.list.map(format);
+	// 		const matched = select(list, info);
+	// 		return matched ? matched.id : Promise.reject();
+	// 	});
 
-public class KuwoMusic extends Provider
-{
-    public KuwoMusic(Keyword targetKeyword)
-    {
-        super("kuwo", targetKeyword);
-    }
+	const keyword = encodeURIComponent(info.keyword.replace(' - ', ' '));
+	const url =
+		'http://search.kuwo.cn/r.s?&correct=1&vipver=1&stype=comprehensive&encoding=utf8' +
+		'&rformat=json&mobi=1&show_copyright_off=1&searchapi=6&all=' +
+		keyword;
 
-    @Override
-    public void collectCandidateKeywords()
-    {
-        String query = keyword2Query(targetKeyword);
-        String token = "1234567890";
-        String url = "http://www.kuwo.cn/api/www/search/searchMusicBykeyWord?key=" +
-                query + "&pn=1&rn=30";
-        try
-        {
-            HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
-            connection.setRequestMethod("GET");
-            connection.setRequestProperty("Referer", "http://kuwo.cn/search/list?key=" + query);
-            connection.setRequestProperty("csrf", token);
-            connection.setRequestProperty("Cookie", "kw_token=" + token);
-            connection.connect();
-            int responseCode = connection.getResponseCode();
-            if (responseCode == HttpURLConnection.HTTP_OK)
-            {
-                byte[] content = ReadStream.read(connection.getInputStream());
-                String str = new String(content);
-                JSONObject jsonObject = JSONObject.parseObject(str);
-                if (jsonObject.getIntValue("code") == 200)
-                {
-                    JSONArray candidates = jsonObject.getJSONObject("data").getJSONArray("list");
-                    for (Object obj : candidates)
-                    {
-                        JSONObject songJsonObject = (JSONObject) obj;
-                        Keyword candidateKeyword = new Keyword();
-                        candidateKeyword.songName = songJsonObject.getString("name");
-                        candidateKeyword.singers = Arrays.asList(songJsonObject.getString("artist").split("&"));
-                        songJsonObjects.add(songJsonObject);
-                        candidateKeywords.add(candidateKeyword);
-                    }
-                }
-            }
-        } catch (IOException e)
-        {
-            e.printStackTrace();
-        }
-    }
+	return request('GET', url)
+		.then((response) => response.json())
+		.then((jsonBody) => {
+			if (
+				!jsonBody ||
+				jsonBody.content.length < 2 ||
+				!jsonBody.content[1].musicpage ||
+				jsonBody.content[1].musicpage.abslist.length < 1
+			)
+				return Promise.reject();
+			const list = jsonBody.content[1].musicpage.abslist.map(format);
+			const matched = select(list, info);
+			return matched ? matched.id : Promise.reject();
+		});
+};
 
-    @Override
-    public Song fetchSelectedSong()
-    {
-        if(selectedIndex == -1)
-        {
-            return null;
-        }
-        JSONObject songJsonObject = songJsonObjects.get(selectedIndex);
-        String mId = songJsonObject.getString("musicrid");
-        JSONObject jsonObject = new JSONObject();
-        jsonObject.put("mid", mId);
-        Song song = fetchSongByJson(jsonObject);
-        if(song != null)
-        {
-            Local.put(targetKeyword.id, providerName, jsonObject);
-        }
-        return song;
-    }
+const track = (id) => {
+	const url = crypto.kuwoapi
+		? 'http://mobi.kuwo.cn/mobi.s?f=kuwo&q=' +
+			crypto.kuwoapi.encryptQuery(
+				'user=0&corp=kuwo&source=kwplayer_ar_5.1.0.0_B_jiakong_vh.apk&p2p=1&type=convert_url2&sig=0&format=' +
+					['flac', 'mp3']
+						.slice(select.ENABLE_FLAC ? 0 : 1)
+						.join('|') +
+					'&rid=' +
+					id
+			)
+		: 'http://antiserver.kuwo.cn/anti.s?type=convert_url&format=mp3&response=url&rid=MUSIC_' +
+			id; // flac refuse
+	// : 'http://www.kuwo.cn/url?format=mp3&response=url&type=convert_url3&br=320kmp3&rid=' + id // flac refuse
 
-    @Override
-    public Song fetchSongByJson(JSONObject jsonObject)
-    {
-        String mId = jsonObject.getString("mid");
-        if(mId == null)
-        {
-            return null;
-        }
-        Song song = null;
-        String url = "http://antiserver.kuwo.cn/anti.s?type=convert_url&format=mp3&response=url&rid=" + mId;
-        try
-        {
-            HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
-            connection.setRequestMethod("GET");
-            connection.connect();
-            int responseCode = connection.getResponseCode();
-            if (responseCode == HttpURLConnection.HTTP_OK)
-            {
-                byte[] content = ReadStream.read(connection.getInputStream());
-                String songUrl = new String(content);
-                Log.d("Kuwo", songUrl);
-                if (songUrl.startsWith("http"))
-                {
-                    song = generateSong(songUrl);
-                }
-            }
-        } catch (IOException e)
-        {
-            e.printStackTrace();
-        }
-        return song;
-    }
-}
+	return request('GET', url, { 'user-agent': 'okhttp/3.10.0' })
+		.then((response) => response.body())
+		.then((body) => {
+			const url = (body.match(/http[^\s$"]+/) || [])[0];
+			return url || Promise.reject();
+		})
+		.catch(() => insure().kuwo.track(id));
+};
+
+const cs = getManagedCacheStorage('provider/kuwo');
+const check = (info) => cs.cache(info, () => search(info)).then(track);
+
+module.exports = { check, track };
